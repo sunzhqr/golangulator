@@ -2,25 +2,27 @@ package telegram
 
 import (
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/sunzhqr/golangulator/internal/domain"
+	"go.uber.org/zap"
 )
 
 type BotHandler struct {
 	Bot        *tgbotapi.BotAPI
 	Calculator domain.Calculator
 	History    domain.HistoryUseCase
+	Logger     *zap.Logger
 }
 
-func NewBotHandler(bot *tgbotapi.BotAPI, calculator domain.Calculator, history domain.HistoryUseCase) *BotHandler {
+func NewBotHandler(bot *tgbotapi.BotAPI, calculator domain.Calculator, history domain.HistoryUseCase, logger *zap.Logger) *BotHandler {
 	return &BotHandler{
 		Bot:        bot,
 		Calculator: calculator,
 		History:    history,
+		Logger:     logger,
 	}
 }
 
@@ -47,7 +49,7 @@ func (h *BotHandler) HandleUpdates() {
 			}
 
 			inlineResult := tgbotapi.NewInlineQueryResultArticle(
-				"calc_"+strconv.Itoa(int(update.InlineQuery.From.ID)), // уникальный ID
+				"calc_"+strconv.Itoa(int(update.InlineQuery.From.ID)),
 				"Вычислить: "+query,
 				contentText,
 			)
@@ -64,7 +66,7 @@ func (h *BotHandler) HandleUpdates() {
 			}
 
 			if _, err := h.Bot.Request(inlineConfig); err != nil {
-				log.Println("Ошибка при отправке inline-ответа:", err)
+				h.Logger.Error("Ошибка при отправке inline-ответа", zap.Error(err))
 			}
 			continue
 		}
@@ -118,7 +120,7 @@ func (h *BotHandler) HandleUpdates() {
 				reply = "Результат: " + strconv.FormatFloat(result, 'f', -1, 64)
 				saveErr := h.History.SaveEntry(chatID, text, result)
 				if saveErr != nil {
-					log.Println(saveErr)
+					h.Logger.Error("Ошибка при сохранении истории", zap.Error(saveErr))
 				}
 			}
 			h.Bot.Send(tgbotapi.NewMessage(chatID, reply))
