@@ -41,10 +41,12 @@ func (h *BotHandler) HandleUpdates() {
 		switch text {
 		case "/start":
 			msg := tgbotapi.NewMessage(chatID, "Привет! Я Голангулятор)\nПришли арифметическое выражение, и я его вычислю.")
+			msg.ReplyMarkup = defaultKeyboard()
 			h.Bot.Send(msg)
 
 		case "/help":
 			msg := tgbotapi.NewMessage(chatID, "Пример: 2 + 2 * (3 - 1)\nКоманды:\n/history - показать последние вычисления\n/clear_history - очистить историю")
+			msg.ReplyMarkup = defaultKeyboard()
 			h.Bot.Send(msg)
 
 		case "/history":

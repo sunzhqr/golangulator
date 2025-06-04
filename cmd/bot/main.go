@@ -39,6 +39,7 @@ func main() {
 	historyUseCase := usecase.NewHistoryUseCase(historyRepo)
 
 	handler := telegram.NewBotHandler(bot, calculator, historyUseCase)
+	handler.InitBotCommands()
 	log.Println("Бот запущен")
 	handler.HandleUpdates()
 }
