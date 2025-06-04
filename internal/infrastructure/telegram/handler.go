@@ -31,7 +31,45 @@ func (h *BotHandler) HandleUpdates() {
 	updates := h.Bot.GetUpdatesChan(u)
 
 	for update := range updates {
-		if update.Message == nil {
+		// Inline mode
+		if update.InlineQuery != nil {
+			query := update.InlineQuery.Query
+			if query == "" {
+				continue
+			}
+
+			result, err := h.Calculator.Eval(query)
+			var contentText string
+			if err != nil {
+				contentText = "Ошибка: " + err.Error()
+			} else {
+				contentText = fmt.Sprintf("%s = %.10g", query, result)
+			}
+
+			inlineResult := tgbotapi.NewInlineQueryResultArticle(
+				"calc_"+strconv.Itoa(int(update.InlineQuery.From.ID)), // уникальный ID
+				"Вычислить: "+query,
+				contentText,
+			)
+			inlineResult.Description = contentText
+			inlineResult.InputMessageContent = tgbotapi.InputTextMessageContent{
+				Text: contentText,
+			}
+
+			inlineConfig := tgbotapi.InlineConfig{
+				InlineQueryID: update.InlineQuery.ID,
+				IsPersonal:    true,
+				CacheTime:     0,
+				Results:       []interface{}{inlineResult},
+			}
+
+			if _, err := h.Bot.Request(inlineConfig); err != nil {
+				log.Println("Ошибка при отправке inline-ответа:", err)
+			}
+			continue
+		}
+
+		if update.Message == nil || update.Message.Text == "" {
 			continue
 		}
 
