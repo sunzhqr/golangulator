@@ -1,9 +1,9 @@
 package parser
 
 import (
+	"errors"
+	"fmt"
 	"math"
-	"regexp"
-	"strings"
 
 	"github.com/Knetic/govaluate"
 )
@@ -13,42 +13,33 @@ func Eval(expr string) (float64, error) {
 
 	functions := map[string]govaluate.ExpressionFunction{
 		"pow": func(args ...interface{}) (interface{}, error) {
-			base := args[0].(float64)
-			exp := args[1].(float64)
+			base, ok1 := toFloat(args[0])
+			exp, ok2 := toFloat(args[1])
+			if !ok1 || !ok2 {
+				return nil, errors.New("некорректные аргументы для функции pow")
+			}
 			return math.Pow(base, exp), nil
 		},
 	}
 
 	e, err := govaluate.NewEvaluableExpressionWithFunctions(expr, functions)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("ошибка в выражении: %s", translateParseError(err))
 	}
-	result, err := e.Evaluate(nil)
+
+	result, err := e.Evaluate(map[string]interface{}{}) // не передаём nil!
 	if err != nil {
-		return 0, err
-	}
-	if val, ok := result.(float64); ok {
-		return val, nil
-	}
-	return 0, nil
-}
-
-func preprocessExpression(expr string) string {
-	expr = strings.ReplaceAll(expr, " ", "")
-
-	re := regexp.MustCompile(`(\d+(?:\.\d+)?|\([\d\+\-\*/\.^]+\))\^(\d+(?:\.\d+)?|\([\d\+\-\*/\.^]+\))`)
-	for {
-		loc := re.FindStringSubmatchIndex(expr)
-		if loc == nil {
-			break
-		}
-		a := expr[loc[2]:loc[3]]
-		b := expr[loc[4]:loc[5]]
-		expr = expr[:loc[0]] + "pow(" + a + "," + b + ")" + expr[loc[1]:]
+		return 0, fmt.Errorf("ошибка при вычислении: %s", translateEvalError(err))
 	}
 
-	rePercent := regexp.MustCompile(`(\d+(?:\.\d+)?)%`)
-	expr = rePercent.ReplaceAllString(expr, "($1/100)")
+	val, ok := toFloat(result)
+	if !ok {
+		return 0, errors.New("результат имеет неподдерживаемый формат")
+	}
 
-	return expr
+	if math.IsInf(val, 0) || math.IsNaN(val) {
+		return 0, errors.New("деление на ноль невозможно или результат не определён")
+	}
+
+	return val, nil
 }

@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"crypto/md5"
 	"fmt"
 	"strconv"
 	"strings"
@@ -33,41 +34,8 @@ func (h *BotHandler) HandleUpdates() {
 	updates := h.Bot.GetUpdatesChan(u)
 
 	for update := range updates {
-		// Inline mode
 		if update.InlineQuery != nil {
-			query := update.InlineQuery.Query
-			if query == "" {
-				continue
-			}
-
-			result, err := h.Calculator.Eval(query)
-			var contentText string
-			if err != nil {
-				contentText = "Ошибка: " + err.Error()
-			} else {
-				contentText = fmt.Sprintf("%s = %.10g", query, result)
-			}
-
-			inlineResult := tgbotapi.NewInlineQueryResultArticle(
-				"calc_"+strconv.Itoa(int(update.InlineQuery.From.ID)),
-				"Вычислить: "+query,
-				contentText,
-			)
-			inlineResult.Description = contentText
-			inlineResult.InputMessageContent = tgbotapi.InputTextMessageContent{
-				Text: contentText,
-			}
-
-			inlineConfig := tgbotapi.InlineConfig{
-				InlineQueryID: update.InlineQuery.ID,
-				IsPersonal:    true,
-				CacheTime:     0,
-				Results:       []interface{}{inlineResult},
-			}
-
-			if _, err := h.Bot.Request(inlineConfig); err != nil {
-				h.Logger.Error("Ошибка при отправке inline-ответа", zap.Error(err))
-			}
+			h.handleInline(update.InlineQuery)
 			continue
 		}
 
@@ -75,55 +43,104 @@ func (h *BotHandler) HandleUpdates() {
 			continue
 		}
 
-		text := update.Message.Text
-		chatID := update.Message.Chat.ID
+		h.handleCommand(update.Message.Chat.ID, update.Message.Text)
+	}
+}
 
-		switch text {
-		case "/start":
-			msg := tgbotapi.NewMessage(chatID, "Привет! Я Голангулятор)\nПришли арифметическое выражение, и я его вычислю.")
-			msg.ReplyMarkup = defaultKeyboard()
-			h.Bot.Send(msg)
+func (h *BotHandler) handleCommand(chatID int64, text string) {
+	switch text {
+	case "/start":
+		h.sendMessage(chatID, "Привет! Я Голангулятор)\nПришли арифметическое выражение, и я его вычислю.", defaultKeyboard())
 
-		case "/help":
-			msg := tgbotapi.NewMessage(chatID, "Пример: 2 + 2 * (3 - 1)\nКоманды:\n/history - показать последние вычисления\n/clear_history - очистить историю")
-			msg.ReplyMarkup = defaultKeyboard()
-			h.Bot.Send(msg)
+	case "/help":
+		h.sendMessage(chatID, "Пример: 2 + 2 * (3 - 1)\nКоманды:\n/history - показать последние вычисления\n/clear_history - очистить историю", defaultKeyboard())
 
-		case "/history":
-			history, err := h.History.GetUserHistory(chatID)
-			if err != nil || len(history) == 0 {
-				h.Bot.Send(tgbotapi.NewMessage(chatID, "История пуста"))
-				continue
-			}
+	case "/history":
+		h.handleHistory(chatID)
 
-			var sb strings.Builder
-			sb.WriteString("Последние вычисления:\n")
-			for index, item := range history {
-				sb.WriteString(fmt.Sprintf("|%d| %s = %v\n", index+1, item.Expression, item.Result))
-			}
-			h.Bot.Send(tgbotapi.NewMessage(chatID, sb.String()))
-
-		case "/clear_history":
-			err := h.History.ClearUserHistory(chatID)
-			if err != nil {
-				h.Bot.Send(tgbotapi.NewMessage(chatID, "Ошибка при очистке истории"))
-			} else {
-				h.Bot.Send(tgbotapi.NewMessage(chatID, "История очищена"))
-			}
-
-		default:
-			result, err := h.Calculator.Eval(text)
-			var reply string
-			if err != nil {
-				reply = "Ошибка в выражении: " + err.Error()
-			} else {
-				reply = "Результат: " + strconv.FormatFloat(result, 'f', -1, 64)
-				saveErr := h.History.SaveEntry(chatID, text, result)
-				if saveErr != nil {
-					h.Logger.Error("Ошибка при сохранении истории", zap.Error(saveErr))
-				}
-			}
-			h.Bot.Send(tgbotapi.NewMessage(chatID, reply))
+	case "/clear_history":
+		if err := h.History.ClearUserHistory(chatID); err != nil {
+			h.sendMessage(chatID, "Ошибка при очистке истории")
+		} else {
+			h.sendMessage(chatID, "История очищена")
 		}
+
+	default:
+		h.handleExpression(chatID, text)
+	}
+}
+
+func (h *BotHandler) handleExpression(chatID int64, expression string) {
+	result, err := h.Calculator.Eval(expression)
+	if err != nil {
+		h.sendMessage(chatID, err.Error())
+		return
+	}
+
+	reply := "Результат: " + strconv.FormatFloat(result, 'f', -1, 64)
+	h.sendMessage(chatID, reply)
+
+	if err := h.History.SaveEntry(chatID, expression, result); err != nil {
+		h.Logger.Error("Ошибка при сохранении истории", zap.Error(err))
+	}
+}
+
+func (h *BotHandler) handleHistory(chatID int64) {
+	history, err := h.History.GetUserHistory(chatID)
+	if err != nil || len(history) == 0 {
+		h.sendMessage(chatID, "История пуста")
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Последние вычисления:\n")
+	for i, entry := range history {
+		sb.WriteString(fmt.Sprintf("|%d| %s = %v\n", i+1, entry.Expression, entry.Result))
+	}
+
+	h.sendMessage(chatID, sb.String())
+}
+
+func (h *BotHandler) handleInline(query *tgbotapi.InlineQuery) {
+	if query.Query == "" {
+		return
+	}
+
+	result, err := h.Calculator.Eval(query.Query)
+	var contentText string
+	if err != nil {
+		contentText = "Ошибка: " + err.Error()
+	} else {
+		contentText = fmt.Sprintf("%s = %.10g", query.Query, result)
+	}
+
+	hash := fmt.Sprintf("%x", md5.Sum([]byte(query.Query)))
+	inlineResult := tgbotapi.NewInlineQueryResultArticle(
+		"calc_"+strconv.Itoa(int(query.From.ID))+"_"+hash,
+		"Вычислить: "+query.Query,
+		contentText,
+	)
+	inlineResult.Description = contentText
+	inlineResult.InputMessageContent = tgbotapi.InputTextMessageContent{Text: contentText}
+
+	inlineConfig := tgbotapi.InlineConfig{
+		InlineQueryID: query.ID,
+		IsPersonal:    true,
+		CacheTime:     0,
+		Results:       []interface{}{inlineResult},
+	}
+
+	if _, err := h.Bot.Request(inlineConfig); err != nil {
+		h.Logger.Error("Ошибка при отправке inline-ответа", zap.Error(err))
+	}
+}
+
+func (h *BotHandler) sendMessage(chatID int64, text string, markup ...tgbotapi.ReplyKeyboardMarkup) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	if len(markup) > 0 {
+		msg.ReplyMarkup = markup[0]
+	}
+	if _, err := h.Bot.Send(msg); err != nil {
+		h.Logger.Error("Ошибка при отправке сообщения", zap.Error(err))
 	}
 }
